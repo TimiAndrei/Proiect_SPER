@@ -6,12 +6,29 @@ import random
 import matplotlib.animation as animation
 
 
-def create_map(size, seed=None):
+def create_map(size, seed=None, num_obstacles=None):
+    """
+    Create a map with randomly placed obstacles
+
+    Args:
+        size: Size of the square map
+        seed: Random seed for reproducibility
+        num_obstacles: Number of obstacles to place (if None, uses a random value)
+
+    Returns:
+        map_grid: 2D numpy array with obstacles (1) and free space (0)
+    """
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
     map_grid = np.zeros((size, size))
-    num_obstacles = random.randint(3, max(3, size // 3))
+
+    # Determine number of obstacles
+    if num_obstacles is None:
+        num_obstacles = random.randint(3, max(3, size // 3))
+    else:
+        num_obstacles = min(num_obstacles, size * size // 4)  # Limit to 25% of map area
+
     max_obs_size = max(2, size // 5)
     for _ in range(num_obstacles):
         obs_size = random.randint(2, max_obs_size)
@@ -22,6 +39,7 @@ def create_map(size, seed=None):
 
 
 def calc_connectivity(slice):
+    """Calculate the connectivity of free space in a slice"""
     connectivity = 0
     last_data = 0
     open_part = False
@@ -43,6 +61,7 @@ def calc_connectivity(slice):
 
 
 def get_adjacency_matrix(parts_left, parts_right):
+    """Get the adjacency matrix between parts"""
     adjacency_matrix = np.zeros([len(parts_left), len(parts_right)])
     for l, lparts in enumerate(parts_left):
         for r, rparts in enumerate(parts_right):
@@ -52,6 +71,19 @@ def get_adjacency_matrix(parts_left, parts_right):
 
 
 def bcd(map_grid):
+    """
+    Implement Boustrophedon Cellular Decomposition
+
+    Args:
+        map_grid: 2D array with obstacles (1) and free space (0)
+
+    Returns:
+        separate_img: Image with cell decomposition
+        current_cell: Number of cells
+        cell_boundaries: Dictionary of cell boundaries
+        x_coordinates: Dictionary of x-coordinates
+        non_neighboor_cells: List of non-neighbor cells
+    """
     erode_img = 1 - map_grid
     last_connectivity = 0
     last_connectivity_parts = []
@@ -117,6 +149,7 @@ def bcd(map_grid):
 def calculate_x_coordinates(
     x_size, y_size, cells_to_visit, cell_boundaries, nonneighbors
 ):
+    """Calculate x-coordinates for cells"""
     cells_x_coordinates = {}
     width_accum_prev = 0
     cell_idx = 1
@@ -356,9 +389,59 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
     ax2.imshow(obstacle_img, origin="lower")
     ax2.set_title("Cellular Decomposition")
 
-    # Robot visualization - dot with trail
-    (robot1,) = ax1.plot([], [], "ro-", markersize=8, linewidth=2)
-    (robot2,) = ax2.plot([], [], "ro-", markersize=8, linewidth=2)
+    # Create path segments that don't cross obstacles
+    height, width = map_grid.shape
+    path_segments = []
+    current_segment = []
+
+    # Helper function to check if a line segment crosses any obstacles
+    def line_crosses_obstacle(p1, p2):
+        x1, y1 = p1
+        x2, y2 = p2
+
+        # For very close points, just check if either endpoint is an obstacle
+        if abs(x2 - x1) <= 1 and abs(y2 - y1) <= 1:
+            return False
+
+        # Number of interpolation steps (more for longer lines)
+        steps = max(abs(x2 - x1), abs(y2 - y1)) * 2
+
+        # Check points along the line
+        for step in range(steps + 1):
+            t = step / steps  # Interpolation parameter [0,1]
+            x = int(x1 + t * (x2 - x1))
+            y = int(y1 + t * (y2 - y1))
+
+            if 0 <= x < width and 0 <= y < height:
+                if map_grid[y, x] == 1:  # Obstacle
+                    return True
+
+        return False
+
+    # Process the path into non-obstacle-crossing segments
+    for i, point in enumerate(path):
+        if not current_segment:
+            current_segment.append(point)
+        else:
+            if i > 0 and line_crosses_obstacle(path[i - 1], point):
+                # If this segment would cross an obstacle, end the current segment
+                if len(current_segment) > 0:
+                    path_segments.append(current_segment)
+                current_segment = [point]
+            else:
+                current_segment.append(point)
+
+    # Add the last segment if not empty
+    if current_segment:
+        path_segments.append(current_segment)
+
+    # Robot visualization - position marker and path segments
+    robot1 = ax1.plot([], [], "ro", markersize=8)[0]
+    robot2 = ax2.plot([], [], "ro", markersize=8)[0]
+
+    # Create line objects for path segments
+    path_lines1 = [ax1.plot([], [], "r-", linewidth=2)[0] for _ in path_segments]
+    path_lines2 = [ax2.plot([], [], "r-", linewidth=2)[0] for _ in path_segments]
 
     # Animation controls
     animation_speed = [100]  # Initial speed (milliseconds)
@@ -366,43 +449,76 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
     def init():
         robot1.set_data([], [])
         robot2.set_data([], [])
-        return robot1, robot2
+        for line in path_lines1 + path_lines2:
+            line.set_data([], [])
+        return [robot1, robot2] + path_lines1 + path_lines2
 
     def animate(i):
-        if i < len(path):
-            # Extract points up to current frame
-            points = path[: i + 1]
-            x, y = zip(*points)
+        if i >= len(path):
+            i = len(path) - 1
 
-            # Update robot positions
-            robot1.set_data(x, y)
-            robot2.set_data(x, y)
-        return robot1, robot2
+        # Update robot position
+        x, y = path[i]
+        robot1.set_data([x], [y])
+        robot2.set_data([x], [y])
+
+        # Update path segments - only show segments we've traversed
+        current_point_index = i
+        active_points = set(path[: current_point_index + 1])
+
+        for seg_idx, segment in enumerate(path_segments):
+            visible_points = [p for p in segment if p in active_points]
+            if visible_points:
+                x_vals, y_vals = (
+                    zip(*visible_points) if len(visible_points) > 1 else ([], [])
+                )
+                path_lines1[seg_idx].set_data(x_vals, y_vals)
+                path_lines2[seg_idx].set_data(x_vals, y_vals)
+            else:
+                path_lines1[seg_idx].set_data([], [])
+                path_lines2[seg_idx].set_data([], [])
+
+        return [robot1, robot2] + path_lines1 + path_lines2
 
     # Create animation
     ani = animation.FuncAnimation(
         fig,
         animate,
         init_func=init,
-        frames=len(path) + 1,
+        frames=len(path),
         interval=animation_speed[0],
         blit=True,
     )
 
     # Function to update animation speed
     def update_speed():
-        ani.event_source.stop()
-        ani.event_source.interval = animation_speed[0]
-        ani.event_source.start()
+        try:
+            ani.event_source.stop()
+            ani.event_source.interval = animation_speed[0]
+            ani.event_source.start()
+        except AttributeError:
+            # Handle case where event_source is not available
+            pass
+
+    # Status text for instructions
+    instruction_text = fig.text(
+        0.5,
+        0.01,
+        "Controls: ← → (speed), Enter (new map), O/P (fewer/more obstacles), Esc (exit)",
+        ha="center",
+        color="black",
+        fontsize=12,
+        bbox=dict(facecolor="white", alpha=0.7),
+    )
 
     # Keyboard event handler
     def on_key(event):
         if event.key == "enter":  # Generate new map
             plt.close(fig)
-            return True
+            return True, None  # Keep obstacle count unchanged
         elif event.key == "escape":  # Exit
             plt.close(fig)
-            return False
+            return False, None
         elif event.key == "left":  # Reduce speed
             animation_speed[0] = min(animation_speed[0] + 50, 1000)
             print(f"Speed: {animation_speed[0]}ms (slower)")
@@ -411,18 +527,25 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
             animation_speed[0] = max(animation_speed[0] - 50, 10)
             print(f"Speed: {animation_speed[0]}ms (faster)")
             update_speed()
+        elif event.key == "o":  # Fewer obstacles
+            plt.close(fig)
+            return True, -1  # Signal to decrease obstacles
+        elif event.key == "p":  # More obstacles
+            plt.close(fig)
+            return True, 1  # Signal to increase obstacles
         return None
 
     # Connect keyboard handler
-    result = [None]  # To store the result
+    result = [None, None]  # [regenerate, obstacle_change]
 
     def handle_close(evt):
-        result[0] = False if result[0] is None else result[0]
+        if result[0] is None:
+            result[0] = False
 
     def on_key_wrapper(event):
         key_result = on_key(event)
         if key_result is not None:
-            result[0] = key_result
+            result[0], result[1] = key_result
 
     fig.canvas.mpl_connect("key_press_event", on_key_wrapper)
     fig.canvas.mpl_connect("close_event", handle_close)
@@ -430,7 +553,7 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
     plt.tight_layout()
     plt.show()
 
-    return result[0]
+    return result
 
 
 def main():
@@ -438,25 +561,72 @@ def main():
     Main function to run the application
     """
     size = 15  # Default map size
-    traverse_mode = True  # Always run in traverse mode
-
     seed = 100  # Initial seed
+    num_obstacles = 5  # Initial number of obstacles
+
     regenerate = True
 
     while regenerate:
         # Create map and calculate cellular decomposition
-        map_grid = create_map(size, seed)
+        map_grid = create_map(size, seed, num_obstacles)
         separate_img, num_cells, cell_boundaries, x_coordinates, non_neighboor_cells = (
             bcd(map_grid)
         )
 
         # Calculate and animate traversal path
         path = calculate_zigzag_path(separate_img, cell_boundaries, x_coordinates)
-        regenerate = animate_traversal(map_grid, separate_img, num_cells, path)
+        result = animate_traversal(map_grid, separate_img, num_cells, path)
+
+        regenerate, obstacle_change = result
 
         if regenerate:
             seed += 1  # Increment seed for a different map
 
+            # Adjust number of obstacles if requested
+            if obstacle_change is not None:
+                num_obstacles = max(1, num_obstacles + obstacle_change)
+                print(f"Number of obstacles: {num_obstacles}")
+
 
 if __name__ == "__main__":
     main()
+
+"""
+=========================================
+BOUSTROPHEDON CELLULAR DECOMPOSITION
+=========================================
+
+A robot path planning algorithm that decomposes the environment into cells 
+and creates a traversal path to cover all accessible areas.
+
+INSTRUCTIONS:
+------------
+1. Run the script to start the simulation with default settings
+   
+   python proiect.py
+
+2. KEYBOARD CONTROLS:
+   - LEFT ARROW: Decrease animation speed
+   - RIGHT ARROW: Increase animation speed
+   - O: Reduce the number of obstacles in the next map
+   - P: Increase the number of obstacles in the next map
+   - ENTER: Generate a new map with current settings
+   - ESC: Exit the application
+
+3. VIEWS:
+   - Left: Original map with robot path
+   - Right: Cellular decomposition with robot path
+
+4. ALGORITHM BEHAVIOR:
+   - The algorithm decomposes the map into cells using BCD
+   - The robot traverses each cell in a zigzag pattern
+   - The robot prioritizes visiting the closest unvisited cells
+   - The path visualization avoids cutting through obstacles
+
+ABOUT THE ALGORITHM:
+-------------------
+Boustrophedon Cellular Decomposition is a method for complete coverage path planning.
+It works by dividing the environment into cells at critical points where obstacles
+change the connectivity of the free space. Each cell is then covered using a back-and-forth
+motion (the term "boustrophedon" refers to this pattern, similar to an ox plowing a field).
+"""
