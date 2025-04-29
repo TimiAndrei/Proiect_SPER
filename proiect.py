@@ -157,7 +157,8 @@ def calculate_x_coordinates(
 def calculate_zigzag_path(separate_img, cell_boundaries, x_coordinates):
     """
     Calculate a traversal path using a recursive boustrophedon approach
-    with vertical (up-down) movement from column to column
+    with vertical (up-down) movement from column to column,
+    prioritizing revisiting unvisited regions as soon as possible
 
     Args:
         separate_img: The image with cell decomposition
@@ -174,47 +175,154 @@ def calculate_zigzag_path(separate_img, cell_boundaries, x_coordinates):
     # Mark obstacles as visited to avoid them
     visited[separate_img == 0] = True
 
+    # Current position tracker
+    current_pos = [None, None]
+
+    # Calculate Manhattan distance between two points
+    def manhattan_distance(p1, p2):
+        return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
+
+    # Find the closest unvisited cell to the current position
+    def find_closest_unvisited():
+        if current_pos[0] is None:
+            return None
+
+        min_dist = float("inf")
+        closest_point = None
+
+        # Scan the entire map for unvisited cells
+        for y in range(height):
+            for x in range(width):
+                if not visited[y, x]:
+                    dist = manhattan_distance((y, x), current_pos)
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_point = (y, x)
+
+        return closest_point
+
+    # Create a safe path from current position to target position
+    def create_path_to(target):
+        if current_pos[0] is None or target is None:
+            return []
+
+        y1, x1 = current_pos
+        y2, x2 = target
+        safe_path = []
+
+        # Try moving vertically first (only if coordinates are valid)
+        if y1 is not None and y2 is not None:
+            y_dir = 1 if y2 > y1 else -1
+            y_start = y1 + y_dir
+            y_end = y2
+
+            # Ensure we move in the right direction
+            if y_dir > 0:
+                y_range = range(y_start, y_end + y_dir, y_dir)
+            else:
+                y_range = range(y_start, y_end + y_dir, y_dir)
+
+            for y in y_range:
+                if 0 <= y < height and not visited[y, x1]:
+                    safe_path.append((x1, y))
+
+        # Then move horizontally (only if coordinates are valid)
+        if x1 is not None and x2 is not None:
+            x_dir = 1 if x2 > x1 else -1
+            x_start = x1 + x_dir
+            x_end = x2
+
+            # Ensure we move in the right direction
+            if x_dir > 0:
+                x_range = range(x_start, x_end + x_dir, x_dir)
+            else:
+                x_range = range(x_start, x_end + x_dir, x_dir)
+
+            for x in x_range:
+                if 0 <= x < width and not visited[y2, x]:
+                    safe_path.append((x, y2))
+
+        return safe_path
+
     # The recursive navigation function for up-down column movement
     def navigate(y, x, direction):
         # Check if position is valid
         if not (0 <= y < height and 0 <= x < width):
-            return
+            return False
 
         # Skip if obstacle or already visited
         if visited[y, x]:
-            return
+            return False
 
         # Mark current position as visited and add to path
         visited[y, x] = True
         path.append((x, y))
+        current_pos[0], current_pos[1] = y, x
 
         # Try to move vertically in current direction first
         next_y = y + direction
-        navigate(next_y, x, direction)
+        if 0 <= next_y < height and not visited[next_y, x]:
+            if navigate(next_y, x, direction):
+                return True
 
         # Then try to move horizontally right and change direction
         next_x = x + 1
         if next_x < width and not visited[y, next_x]:
-            navigate(y, next_x, -direction)
+            if navigate(y, next_x, -direction):
+                return True
 
         # If can't move right, try moving left and change direction
         next_x = x - 1
         if next_x >= 0 and not visited[y, next_x]:
-            navigate(y, next_x, -direction)
+            if navigate(y, next_x, -direction):
+                return True
 
-    # Find a good starting point in the left side of the map
-    start_x, start_y = None, None
-    for y in range(height):
-        for x in range(width):  # Start from left
-            if not visited[y, x]:
-                start_y, start_x = y, x
+        return False
+
+    # Start from top-left and continue until all accessible cells are visited
+    remaining = np.sum(~visited)
+
+    while remaining > 0:
+        # If we're just starting or need to find a new point
+        if current_pos[0] is None:
+            # Find the first unvisited point
+            start_found = False
+            for y in range(height):
+                for x in range(width):
+                    if not visited[y, x]:
+                        current_pos = [y, x]
+                        start_found = True
+                        break
+                if start_found:
+                    break
+
+            # If no unvisited points, we're done
+            if not start_found:
                 break
-        if start_x is not None:
-            break
 
-    # If a valid starting point is found, begin navigation
-    if start_y is not None:
-        navigate(start_y, start_x, 1)  # Start moving down
+            # Start navigation from this point
+            navigate(current_pos[0], current_pos[1], 1)
+        else:
+            # Find the closest unvisited cell
+            target = find_closest_unvisited()
+            if target is None:
+                break
+
+            # Create path to the target
+            target_path = create_path_to(target)
+
+            # Add path points and mark them as visited
+            for x, y in target_path:
+                if not visited[y, x]:
+                    visited[y, x] = True
+                    path.append((x, y))
+                    current_pos = [y, x]
+
+            # Start navigation from the new point
+            navigate(current_pos[0], current_pos[1], 1)
+
+        # Recalculate remaining unvisited cells
+        remaining = np.sum(~visited)
 
     return path
 
