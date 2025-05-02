@@ -6,6 +6,8 @@ import random
 import matplotlib.animation as animation
 import sys
 import time
+from collections import deque
+import argparse
 
 
 def create_map(size, seed=None, num_obstacles=None):
@@ -625,32 +627,344 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
     return result
 
 
+def bfs_path(start, goal, map_grid):
+    """
+    Find the shortest path from start to goal using BFS, avoiding obstacles.
+    Args:
+        start: (x, y) tuple
+        goal: (x, y) tuple
+        map_grid: 2D numpy array, 1=obstacle, 0=free
+    Returns:
+        List of (x, y) tuples representing the path (including start and goal)
+        or [] if no path found
+    """
+    width, height = map_grid.shape[1], map_grid.shape[0]
+    queue = deque([start])
+    visited = set([start])
+    parent = {start: None}
+    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+    while queue:
+        current = queue.popleft()
+        if current == goal:
+            # Reconstruct path
+            path = []
+            while current is not None:
+                path.append(current)
+                current = parent[current]
+            return path[::-1]
+        for dx, dy in directions:
+            nx, ny = current[0] + dx, current[1] + dy
+            if 0 <= nx < width and 0 <= ny < height:
+                if map_grid[ny, nx] == 0 and (nx, ny) not in visited:
+                    visited.add((nx, ny))
+                    parent[(nx, ny)] = current
+                    queue.append((nx, ny))
+    return []
+
+
+def calculate_zigzag_path_bfs(separate_img, cell_boundaries, x_coordinates, map_grid):
+    """
+    BCD traversal: traverse cells in BCD order, zigzag in each cell, BFS between cells for continuity.
+    Args:
+        separate_img: The image with cell decomposition
+        cell_boundaries: Dictionary containing cell boundary information
+        x_coordinates: Dictionary containing x coordinates for each cell
+        map_grid: The original map with obstacles (for BFS)
+    Returns:
+        path: List of (x, y) coordinates for the traversal path
+    """
+    path = []
+    prev_end = None
+    for cell in sorted(cell_boundaries.keys()):
+        x_cols = x_coordinates[cell]
+        y_ranges = cell_boundaries[cell]
+        cell_path = []
+        for i, (col, (row_start, row_end)) in enumerate(zip(x_cols, y_ranges)):
+            rng = range(row_start, row_end)
+            if i % 2 == 0:
+                for row in rng:
+                    if map_grid is None or map_grid[row, col] == 0:
+                        cell_path.append((col, row))
+            else:
+                for row in reversed(rng):
+                    if map_grid is None or map_grid[row, col] == 0:
+                        cell_path.append((col, row))
+        if not cell_path:
+            continue  # skip empty cells
+        cell_start = cell_path[0]
+        if prev_end is not None and map_grid is not None:
+            bfs = bfs_path(prev_end, cell_start, map_grid)
+            if bfs and len(bfs) > 1:
+                if bfs[-1] == cell_start:
+                    path.extend(bfs[1:])
+                else:
+                    path.extend(bfs[1:])
+                    path.append(cell_start)
+            else:
+                path.append(cell_start)
+        else:
+            path.append(cell_start)
+        path.extend(cell_path[1:])
+        prev_end = cell_path[-1]
+    return path
+
+
+def animate_traversal_side_by_side(map_grid, separate_img, num_cells, path_classic, path_bfs):
+    """
+    Animate the traversal of the map using a simple robot visualization
+    side-by-side comparison between classic and BCD traversal
+
+    Args:
+        map_grid: Original map with obstacles
+        separate_img: Image with cell decomposition
+        num_cells: Number of cells
+        path_classic: List of (x, y) coordinates for classic traversal
+        path_bfs: List of (x, y) coordinates for BCD traversal
+    """
+    # Create figure with two views - cellular decomposition
+    fig, axs = plt.subplots(1, 2, figsize=(16, 8))
+
+    # Display cell decomposition with colors
+    cmap = plt.colormaps["tab20"].resampled(num_cells + 1)
+    norm = colors.Normalize(vmin=0, vmax=num_cells)
+    masked_img = np.ma.masked_where(separate_img == 0, separate_img)
+    axs[0].imshow(masked_img, cmap=cmap, norm=norm, origin="lower")
+    axs[1].imshow(masked_img, cmap=cmap, norm=norm, origin="lower")
+
+    # Add black for obstacles
+    obstacle_img = np.zeros((*separate_img.shape, 4))
+    obstacle_img[separate_img == 0, 3] = 1
+    axs[0].imshow(obstacle_img, origin="lower")
+    axs[1].imshow(obstacle_img, origin="lower")
+    axs[0].set_title("Classic Traversal")
+    axs[1].set_title("BCD Traversal")
+
+    # Create path segments that don't cross obstacles
+    height, width = map_grid.shape
+    path_segments_classic = []
+    path_segments_bfs = []
+    current_segment_classic = []
+    current_segment_bfs = []
+
+    # Helper function to check if a line segment crosses any obstacles
+    def line_crosses_obstacle(p1, p2):
+        x1, y1 = p1
+        x2, y2 = p2
+
+        # For very close points, just check if either endpoint is an obstacle
+        if abs(x2 - x1) <= 1 and abs(y2 - y1) <= 1:
+            return False
+
+        # Number of interpolation steps (more for longer lines)
+        steps = max(abs(x2 - x1), abs(y2 - y1)) * 2
+
+        # Check points along the line
+        for step in range(steps + 1):
+            t = step / steps  # Interpolation parameter [0,1]
+            x = int(x1 + t * (x2 - x1))
+            y = int(y1 + t * (y2 - y1))
+
+            if 0 <= x < width and 0 <= y < height:
+                if map_grid[y, x] == 1:  # Obstacle
+                    return True
+
+        return False
+
+    # Process the paths into non-obstacle-crossing segments
+    for i, point in enumerate(path_classic):
+        if not current_segment_classic:
+            current_segment_classic.append(point)
+        else:
+            if i > 0 and line_crosses_obstacle(path_classic[i - 1], point):
+                # If this segment would cross an obstacle, end the current segment
+                if len(current_segment_classic) > 0:
+                    path_segments_classic.append(current_segment_classic)
+                current_segment_classic = [point]
+            else:
+                current_segment_classic.append(point)
+
+    # Add the last segment if not empty
+    if current_segment_classic:
+        path_segments_classic.append(current_segment_classic)
+
+    for i, point in enumerate(path_bfs):
+        if not current_segment_bfs:
+            current_segment_bfs.append(point)
+        else:
+            if i > 0 and line_crosses_obstacle(path_bfs[i - 1], point):
+                # If this segment would cross an obstacle, end the current segment
+                if len(current_segment_bfs) > 0:
+                    path_segments_bfs.append(current_segment_bfs)
+                current_segment_bfs = [point]
+            else:
+                current_segment_bfs.append(point)
+
+    # Add the last segment if not empty
+    if current_segment_bfs:
+        path_segments_bfs.append(current_segment_bfs)
+
+    # Robot visualization - position markers and path segments
+    robot_classic = axs[0].plot([], [], "ro", markersize=8)[0]
+    robot_bfs = axs[1].plot([], [], "ro", markersize=8)[0]
+
+    # Create line objects for path segments
+    path_lines_classic = [axs[0].plot(
+        [], [], "r-", linewidth=2)[0] for _ in path_segments_classic]
+    path_lines_bfs = [axs[1].plot([], [], "r-", linewidth=2)[0]
+                      for _ in path_segments_bfs]
+
+    # Animation controls
+    animation_speed = [100]  # Initial speed (milliseconds)
+
+    def init():
+        robot_classic.set_data([], [])
+        robot_bfs.set_data([], [])
+        for line in path_lines_classic:
+            line.set_data([], [])
+        for line in path_lines_bfs:
+            line.set_data([], [])
+        return [robot_classic] + path_lines_classic + [robot_bfs] + path_lines_bfs
+
+    def animate(i):
+        idx1 = min(i, len(path_classic) - 1)
+        idx2 = min(i, len(path_bfs) - 1)
+        x_classic, y_classic = path_classic[idx1]
+        x_bfs, y_bfs = path_bfs[idx2]
+        robot_classic.set_data([x_classic], [y_classic])
+        robot_bfs.set_data([x_bfs], [y_bfs])
+
+        # Update path segments - only show segments we've traversed
+        current_point_index_classic = idx1
+        current_point_index_bfs = idx2
+        active_points_classic = set(
+            path_classic[: current_point_index_classic + 1])
+        active_points_bfs = set(path_bfs[: current_point_index_bfs + 1])
+
+        for seg_idx, segment in enumerate(path_segments_classic):
+            visible_points_classic = [
+                p for p in segment if p in active_points_classic]
+            if visible_points_classic:
+                x_vals_classic, y_vals_classic = (
+                    zip(*visible_points_classic) if len(visible_points_classic) > 1 else ([], [])
+                )
+                path_lines_classic[seg_idx].set_data(
+                    x_vals_classic, y_vals_classic)
+            else:
+                path_lines_classic[seg_idx].set_data([], [])
+
+        for seg_idx, segment in enumerate(path_segments_bfs):
+            visible_points_bfs = [p for p in segment if p in active_points_bfs]
+            if visible_points_bfs:
+                x_vals_bfs, y_vals_bfs = (
+                    zip(*visible_points_bfs) if len(visible_points_bfs) > 1 else ([], [])
+                )
+                path_lines_bfs[seg_idx].set_data(x_vals_bfs, y_vals_bfs)
+            else:
+                path_lines_bfs[seg_idx].set_data([], [])
+
+        return [robot_classic] + path_lines_classic + [robot_bfs] + path_lines_bfs
+
+    # Create animation
+    ani = animation.FuncAnimation(
+        fig,
+        animate,
+        init_func=init,
+        frames=max(len(path_classic), len(path_bfs)),
+        interval=animation_speed[0],
+        blit=True,
+    )
+
+    # Function to update animation speed
+    def update_speed():
+        try:
+            ani.event_source.stop()
+            ani.event_source.interval = animation_speed[0]
+            ani.event_source.start()
+        except AttributeError:
+            pass
+
+    # Status text for instructions
+    instruction_text = fig.text(
+        0.5,
+        0.01,
+        "Controls: ← (slow/stop), → (max speed), Enter (new map), O/P (fewer/more obstacles), Esc (exit)",
+        ha="center",
+        color="black",
+        fontsize=12,
+        bbox=dict(facecolor="white", alpha=0.7),
+    )
+
+    # Keyboard event handler
+    def on_key(event):
+        if event.key == "enter":  # Generate new map
+            plt.close(fig)
+            return True, None  # Keep obstacle count unchanged
+        elif event.key == "escape":  # Exit
+            plt.close(fig)
+            return False, None
+        elif event.key == "left":  # Slow down or stop
+            animation_speed[0] = min(animation_speed[0] + 50, 1000)
+            update_speed()
+        elif event.key == "right":  # Max speed
+            animation_speed[0] = 1  # Set to maximum speed
+            update_speed()
+        elif event.key == "o":  # Fewer obstacles
+            plt.close(fig)
+            return True, -1  # Signal to decrease obstacles
+        elif event.key == "p":  # More obstacles
+            plt.close(fig)
+            return True, 1  # Signal to increase obstacles
+        return None
+
+    # Connect keyboard handler
+    result = [None, None]  # [regenerate, obstacle_change]
+
+    def handle_close(evt):
+        if result[0] is None:
+            result[0] = False
+
+    def on_key_wrapper(event):
+        key_result = on_key(event)
+        if key_result is not None:
+            result[0], result[1] = key_result
+
+    fig.canvas.mpl_connect("key_press_event", on_key_wrapper)
+    fig.canvas.mpl_connect("close_event", handle_close)
+
+    plt.tight_layout()
+    plt.show()
+
+    return result
+
+
 def main():
     """
     Main function to run the application
 
     Usage:
-        python proiect.py [map_size]
+        python proiect.py [map_size] [--mode classic|bfs|both]
 
     Args:
         map_size (int, optional): Size of the square map. Defaults to 15 if not provided.
+        --mode: 'classic' (default), 'bfs', or 'both' for side-by-side comparison.
+            classic - Classic BCD (no BFS between cells, just zigzag and jump)
+            bfs     - BCD with BFS transitions (zigzag in each cell, BFS between cells)
+            both    - Show both traversals side by side for comparison
     """
     # Increase recursion limit for larger maps
     sys.setrecursionlimit(10000)
 
     # Get map size from command line argument or use default
-    if len(sys.argv) > 1:
-        try:
-            size = int(sys.argv[1])
-            if size < 5:
-                print("Map size must be at least 5x5. Using default size of 15.")
-                size = 15
-        except ValueError:
-            print("Invalid map size. Using default size of 15.")
-            size = 15
-    else:
-        size = 15  # Default map size
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument('map_size', nargs='?', type=int, default=15)
+    parser.add_argument(
+        '--mode', choices=['classic', 'bfs', 'both'], default='classic')
+    args = parser.parse_args()
+    size = args.map_size
+    mode = args.mode
+    if size < 5:
+        print("Map size must be at least 5x5. Using default size of 15.")
+        size = 15
     seed = 100  # Initial seed
     num_obstacles = 5  # Initial number of obstacles
 
@@ -669,10 +983,21 @@ def main():
             break
 
         # Calculate and animate traversal path
-        path = calculate_zigzag_path(
-            separate_img, cell_boundaries, x_coordinates)
-        result = animate_traversal(map_grid, separate_img, num_cells, path)
-
+        if mode == 'classic':
+            path = calculate_zigzag_path(
+                separate_img, cell_boundaries, x_coordinates)
+            result = animate_traversal(map_grid, separate_img, num_cells, path)
+        elif mode == 'bfs':
+            path = calculate_zigzag_path_bfs(
+                separate_img, cell_boundaries, x_coordinates, map_grid=map_grid)
+            result = animate_traversal(map_grid, separate_img, num_cells, path)
+        elif mode == 'both':
+            path_classic = calculate_zigzag_path(
+                separate_img, cell_boundaries, x_coordinates)
+            path_bfs = calculate_zigzag_path_bfs(
+                separate_img, cell_boundaries, x_coordinates, map_grid=map_grid)
+            result = animate_traversal_side_by_side(
+                map_grid, separate_img, num_cells, path_classic, path_bfs)
         regenerate, obstacle_change = result
 
         if regenerate:
@@ -695,34 +1020,45 @@ BOUSTROPHEDON CELLULAR DECOMPOSITION
 A robot path planning algorithm that decomposes the environment into cells 
 and creates a traversal path to cover all accessible areas.
 
-INSTRUCTIONS:
-------------
-1. Run the script to start the simulation with default settings
-   
-   python proiect.py [map_size]
-   
-   where map_size is an optional integer argument specifying the size of the square map.
-   If not provided, the default size is 15x15.
+USAGE:
+------
+    python proiect.py [map_size] [--mode classic|bfs|both]
 
-2. KEYBOARD CONTROLS:
-   - LEFT ARROW: Slow down or stop
-   - RIGHT ARROW: Max speed
-   - O: Reduce the number of obstacles in the next map
-   - P: Increase the number of obstacles in the next map
-   - ENTER: Generate a new map with current settings
-   - ESC: Exit the application
+    map_size: Optional integer argument specifying the size of the square map (default: 15)
+    --mode:   Optional argument to select the traversal mode:
+              classic - Classic BCD (no BFS between cells, just zigzag and jump)
+              bfs     - BCD with BFS transitions (zigzag in each cell, BFS between cells)
+              both    - Show both traversals side by side for comparison
 
-3. VIEW:
-   - Cellular decomposition with robot path
+    Examples:
+        python proiect.py 20 --mode classic
+        python proiect.py 20 --mode bfs
+        python proiect.py 20 --mode both
 
-4. ALGORITHM BEHAVIOR:
-   - The algorithm decomposes the map into cells using BCD
-   - The robot traverses each cell in a zigzag pattern
-   - The robot prioritizes visiting the closest unvisited cells
-   - The path visualization avoids cutting through obstacles
+KEYBOARD CONTROLS:
+------------------
+    LEFT ARROW:  Slow down animation
+    RIGHT ARROW: Speed up animation (to max)
+    O:           Fewer obstacles in the next map
+    P:           More obstacles in the next map
+    ENTER:       Generate a new map with current settings
+    ESC:         Exit the application
+
+VIEWS:
+------
+    --mode classic: Shows classic BCD traversal
+    --mode bfs:     Shows BCD traversal with BFS transitions
+    --mode both:    Shows both traversals side by side
+
+ALGORITHM BEHAVIOR:
+-------------------
+    - The algorithm decomposes the map into cells using BCD
+    - The robot traverses each cell in a zigzag pattern
+    - The robot prioritizes visiting the closest unvisited cells
+    - The path visualization avoids cutting through obstacles (in BFS mode)
 
 ABOUT THE ALGORITHM:
--------------------
+--------------------
 Boustrophedon Cellular Decomposition is a method for complete coverage path planning.
 It works by dividing the environment into cells at critical points where obstacles
 change the connectivity of the free space. Each cell is then covered using a back-and-forth
