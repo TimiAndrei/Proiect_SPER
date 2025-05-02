@@ -74,19 +74,100 @@ def get_adjacency_matrix(parts_left, parts_right):
     return adjacency_matrix
 
 
-def bcd(map_grid):
+def animate_decomposition_cells(map_grid, separate_img, num_cells):
+    """
+    Animate the Boustrophedon decomposition process cell by cell.
+    Args:
+        map_grid: Original map with obstacles
+        separate_img: Final cell decomposition image
+        num_cells: Number of cells
+    Returns:
+        True if Enter was pressed to continue, False if window closed
+    """
+    fig, ax = plt.subplots(figsize=(8, 8))
+    cmap = plt.colormaps["tab20"].resampled(num_cells + 1)
+    norm = colors.Normalize(vmin=0, vmax=num_cells)
+
+    # Prepare cell-by-cell reveal images
+    cell_labels = [cell for cell in np.unique(separate_img) if cell != 0]
+    reveal_imgs = []
+    revealed = np.zeros_like(separate_img)
+    for cell in cell_labels:
+        revealed = revealed.copy()
+        revealed[separate_img == cell] = cell
+        reveal_imgs.append(revealed.copy())
+
+    # Animation state
+    finished = [False]
+    proceed = [False]
+
+    def init():
+        ax.clear()
+        ax.set_title("Decomposition Progress (Cell by Cell)")
+        return []
+
+    def animate(i):
+        ax.clear()
+        masked_img = np.ma.masked_where(reveal_imgs[i] == 0, reveal_imgs[i])
+        ax.imshow(masked_img, cmap=cmap, norm=norm, origin="lower")
+        obstacle_img = np.zeros((*map_grid.shape, 4))
+        obstacle_img[map_grid == 1, 3] = 1
+        ax.imshow(obstacle_img, origin="lower")
+        ax.set_title(f"Decomposition Progress: Cell {i+1}/{len(reveal_imgs)}")
+        if i == len(reveal_imgs) - 1:
+            finished[0] = True
+        return []
+
+    ani = animation.FuncAnimation(
+        fig,
+        animate,
+        init_func=init,
+        frames=len(reveal_imgs),
+        interval=300,
+        blit=True,
+        repeat=False
+    )
+
+    # Instructions
+    instruction_text = fig.text(
+        0.5,
+        0.01,
+        "Press Enter to continue to trajectory animation, Esc to exit",
+        ha="center",
+        color="black",
+        fontsize=12,
+        bbox=dict(facecolor="white", alpha=0.7),
+    )
+
+    def on_key(event):
+        if finished[0]:
+            if event.key == "enter":
+                proceed[0] = True
+                plt.close(fig)
+            elif event.key == "escape":
+                proceed[0] = False
+                plt.close(fig)
+
+    fig.canvas.mpl_connect("key_press_event", on_key)
+
+    plt.tight_layout()
+    plt.show()
+    return proceed[0]
+
+
+def bcd(map_grid, return_progress=False):
     """
     Implement Boustrophedon Cellular Decomposition
-
     Args:
         map_grid: 2D array with obstacles (1) and free space (0)
-
+        return_progress: If True, also return a list of intermediate images for animation
     Returns:
         separate_img: Image with cell decomposition
         current_cell: Number of cells
         cell_boundaries: Dictionary of cell boundaries
         x_coordinates: Dictionary of x-coordinates
         non_neighboor_cells: List of non-neighbor cells
+        [separate_img_progress]: (optional) List of intermediate images
     """
     erode_img = 1 - map_grid
     last_connectivity = 0
@@ -96,6 +177,7 @@ def bcd(map_grid):
     separate_img = np.copy(erode_img)
     cell_boundaries = {}
     non_neighboor_cells = []
+    separate_img_progress = [] if return_progress else None
 
     for col in range(erode_img.shape[1]):
         current_slice = erode_img[:, col]
@@ -106,6 +188,8 @@ def bcd(map_grid):
             current_cell += connectivity
         elif connectivity == 0:
             current_cells = []
+            if return_progress:
+                separate_img_progress.append(np.copy(separate_img))
             continue
         else:
             adj_matrix = get_adjacency_matrix(
@@ -134,6 +218,8 @@ def bcd(map_grid):
 
         last_connectivity = connectivity
         last_connectivity_parts = connective_parts
+        if return_progress:
+            separate_img_progress.append(np.copy(separate_img))
 
     x_coordinates = calculate_x_coordinates(
         separate_img.shape[1],
@@ -143,13 +229,23 @@ def bcd(map_grid):
         non_neighboor_cells,
     )
 
-    return (
-        separate_img,
-        current_cell - 1,
-        cell_boundaries,
-        x_coordinates,
-        non_neighboor_cells,
-    )
+    if return_progress:
+        return (
+            separate_img,
+            current_cell - 1,
+            cell_boundaries,
+            x_coordinates,
+            non_neighboor_cells,
+            separate_img_progress,
+        )
+    else:
+        return (
+            separate_img,
+            current_cell - 1,
+            cell_boundaries,
+            x_coordinates,
+            non_neighboor_cells,
+        )
 
 
 def calculate_x_coordinates(
@@ -563,9 +659,14 @@ def main():
     while regenerate:
         # Create map and calculate cellular decomposition
         map_grid = create_map(size, seed, num_obstacles)
-        separate_img, num_cells, cell_boundaries, x_coordinates, non_neighboor_cells = (
-            bcd(map_grid)
-        )
+        bcd_result = bcd(map_grid, return_progress=False)
+        separate_img, num_cells, cell_boundaries, x_coordinates, non_neighboor_cells = bcd_result
+
+        # Animate decomposition cell by cell, wait for Enter
+        proceed = animate_decomposition_cells(
+            map_grid, separate_img, num_cells)
+        if not proceed:
+            break
 
         # Calculate and animate traversal path
         path = calculate_zigzag_path(
