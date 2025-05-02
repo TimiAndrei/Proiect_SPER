@@ -4,6 +4,8 @@ import matplotlib.colors as colors
 import matplotlib.cm as cm
 import random
 import matplotlib.animation as animation
+import sys
+import time
 
 
 def create_map(size, seed=None, num_obstacles=None):
@@ -27,14 +29,16 @@ def create_map(size, seed=None, num_obstacles=None):
     if num_obstacles is None:
         num_obstacles = random.randint(3, max(3, size // 3))
     else:
-        num_obstacles = min(num_obstacles, size * size // 4)  # Limit to 25% of map area
+        num_obstacles = min(num_obstacles, size * size //
+                            4)  # Limit to 25% of map area
 
     max_obs_size = max(2, size // 5)
     for _ in range(num_obstacles):
         obs_size = random.randint(2, max_obs_size)
         start_row = random.randint(0, size - obs_size)
         start_col = random.randint(0, size - obs_size)
-        map_grid[start_row : start_row + obs_size, start_col : start_col + obs_size] = 1
+        map_grid[start_row: start_row + obs_size,
+                 start_col: start_col + obs_size] = 1
     return map_grid
 
 
@@ -104,14 +108,16 @@ def bcd(map_grid):
             current_cells = []
             continue
         else:
-            adj_matrix = get_adjacency_matrix(last_connectivity_parts, connective_parts)
+            adj_matrix = get_adjacency_matrix(
+                last_connectivity_parts, connective_parts)
             new_cells = [0] * len(connective_parts)
             for i in range(adj_matrix.shape[0]):
                 if np.sum(adj_matrix[i, :]) == 1:
-                    new_cells[int(np.argwhere(adj_matrix[i, :])[0])] = current_cells[i]
+                    idx = np.argwhere(adj_matrix[i, :])[0][0]
+                    new_cells[int(idx)] = current_cells[i]
                 elif np.sum(adj_matrix[i, :]) > 1:
                     for idx in np.argwhere(adj_matrix[i, :]):
-                        new_cells[int(idx)] = current_cell
+                        new_cells[int(idx[0])] = current_cell
                         current_cell += 1
             for i in range(adj_matrix.shape[1]):
                 if np.sum(adj_matrix[:, i]) > 1 or np.sum(adj_matrix[:, i]) == 0:
@@ -120,7 +126,7 @@ def bcd(map_grid):
             current_cells = new_cells
 
         for cell, slice_part in zip(current_cells, connective_parts):
-            separate_img[slice_part[0] : slice_part[1], col] = cell
+            separate_img[slice_part[0]: slice_part[1], col] = cell
             cell_boundaries.setdefault(cell, []).append(slice_part)
 
         if len(current_cells) > 1:
@@ -191,7 +197,7 @@ def calculate_zigzag_path(separate_img, cell_boundaries, x_coordinates):
     """
     Calculate a traversal path using a recursive boustrophedon approach
     with vertical (up-down) movement from column to column,
-    prioritizing revisiting unvisited regions as soon as possible
+    prioritizing revisiting unvisited regions as soon as possible.
 
     Args:
         separate_img: The image with cell decomposition
@@ -217,9 +223,6 @@ def calculate_zigzag_path(separate_img, cell_boundaries, x_coordinates):
 
     # Find the closest unvisited cell to the current position
     def find_closest_unvisited():
-        if current_pos[0] is None:
-            return None
-
         min_dist = float("inf")
         closest_point = None
 
@@ -227,7 +230,10 @@ def calculate_zigzag_path(separate_img, cell_boundaries, x_coordinates):
         for y in range(height):
             for x in range(width):
                 if not visited[y, x]:
-                    dist = manhattan_distance((y, x), current_pos)
+                    if current_pos[0] is not None:
+                        dist = manhattan_distance((y, x), current_pos)
+                    else:
+                        dist = 0  # Start at the first unvisited cell
                     if dist < min_dist:
                         min_dist = dist
                         closest_point = (y, x)
@@ -243,41 +249,21 @@ def calculate_zigzag_path(separate_img, cell_boundaries, x_coordinates):
         y2, x2 = target
         safe_path = []
 
-        # Try moving vertically first (only if coordinates are valid)
-        if y1 is not None and y2 is not None:
-            y_dir = 1 if y2 > y1 else -1
-            y_start = y1 + y_dir
-            y_end = y2
+        # Move vertically first
+        y_dir = 1 if y2 > y1 else -1
+        for y in range(y1, y2 + y_dir, y_dir):
+            if 0 <= y < height and not visited[y, x1]:
+                safe_path.append((x1, y))
 
-            # Ensure we move in the right direction
-            if y_dir > 0:
-                y_range = range(y_start, y_end + y_dir, y_dir)
-            else:
-                y_range = range(y_start, y_end + y_dir, y_dir)
-
-            for y in y_range:
-                if 0 <= y < height and not visited[y, x1]:
-                    safe_path.append((x1, y))
-
-        # Then move horizontally (only if coordinates are valid)
-        if x1 is not None and x2 is not None:
-            x_dir = 1 if x2 > x1 else -1
-            x_start = x1 + x_dir
-            x_end = x2
-
-            # Ensure we move in the right direction
-            if x_dir > 0:
-                x_range = range(x_start, x_end + x_dir, x_dir)
-            else:
-                x_range = range(x_start, x_end + x_dir, x_dir)
-
-            for x in x_range:
-                if 0 <= x < width and not visited[y2, x]:
-                    safe_path.append((x, y2))
+        # Then move horizontally
+        x_dir = 1 if x2 > x1 else -1
+        for x in range(x1, x2 + x_dir, x_dir):
+            if 0 <= x < width and not visited[y2, x]:
+                safe_path.append((x, y2))
 
         return safe_path
 
-    # The recursive navigation function for up-down column movement
+    # Optimized navigation function for zigzag traversal
     def navigate(y, x, direction):
         # Check if position is valid
         if not (0 <= y < height and 0 <= x < width):
@@ -370,24 +356,20 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
         num_cells: Number of cells
         path: List of (x, y) coordinates to traverse
     """
-    # Create figure with two views - original map and cellular decomposition
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
-
-    # Display original map
-    ax1.imshow(map_grid, cmap="Greys", origin="lower")
-    ax1.set_title("Original Map")
+    # Create figure with single view - cellular decomposition
+    fig, ax = plt.subplots(figsize=(8, 8))
 
     # Display cell decomposition with colors
-    cmap = cm.get_cmap("tab20", num_cells + 1)
+    cmap = plt.colormaps["tab20"].resampled(num_cells + 1)
     norm = colors.Normalize(vmin=0, vmax=num_cells)
     masked_img = np.ma.masked_where(separate_img == 0, separate_img)
-    ax2.imshow(masked_img, cmap=cmap, norm=norm, origin="lower")
+    ax.imshow(masked_img, cmap=cmap, norm=norm, origin="lower")
 
     # Add black for obstacles
     obstacle_img = np.zeros((*separate_img.shape, 4))
     obstacle_img[separate_img == 0, 3] = 1
-    ax2.imshow(obstacle_img, origin="lower")
-    ax2.set_title("Cellular Decomposition")
+    ax.imshow(obstacle_img, origin="lower")
+    ax.set_title("Cellular Decomposition")
 
     # Create path segments that don't cross obstacles
     height, width = map_grid.shape
@@ -436,22 +418,19 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
         path_segments.append(current_segment)
 
     # Robot visualization - position marker and path segments
-    robot1 = ax1.plot([], [], "ro", markersize=8)[0]
-    robot2 = ax2.plot([], [], "ro", markersize=8)[0]
+    robot = ax.plot([], [], "ro", markersize=8)[0]
 
     # Create line objects for path segments
-    path_lines1 = [ax1.plot([], [], "r-", linewidth=2)[0] for _ in path_segments]
-    path_lines2 = [ax2.plot([], [], "r-", linewidth=2)[0] for _ in path_segments]
+    path_lines = [ax.plot([], [], "r-", linewidth=2)[0] for _ in path_segments]
 
     # Animation controls
     animation_speed = [100]  # Initial speed (milliseconds)
 
     def init():
-        robot1.set_data([], [])
-        robot2.set_data([], [])
-        for line in path_lines1 + path_lines2:
+        robot.set_data([], [])
+        for line in path_lines:
             line.set_data([], [])
-        return [robot1, robot2] + path_lines1 + path_lines2
+        return [robot] + path_lines
 
     def animate(i):
         if i >= len(path):
@@ -459,8 +438,7 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
 
         # Update robot position
         x, y = path[i]
-        robot1.set_data([x], [y])
-        robot2.set_data([x], [y])
+        robot.set_data([x], [y])
 
         # Update path segments - only show segments we've traversed
         current_point_index = i
@@ -472,13 +450,11 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
                 x_vals, y_vals = (
                     zip(*visible_points) if len(visible_points) > 1 else ([], [])
                 )
-                path_lines1[seg_idx].set_data(x_vals, y_vals)
-                path_lines2[seg_idx].set_data(x_vals, y_vals)
+                path_lines[seg_idx].set_data(x_vals, y_vals)
             else:
-                path_lines1[seg_idx].set_data([], [])
-                path_lines2[seg_idx].set_data([], [])
+                path_lines[seg_idx].set_data([], [])
 
-        return [robot1, robot2] + path_lines1 + path_lines2
+        return [robot] + path_lines
 
     # Create animation
     ani = animation.FuncAnimation(
@@ -497,14 +473,13 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
             ani.event_source.interval = animation_speed[0]
             ani.event_source.start()
         except AttributeError:
-            # Handle case where event_source is not available
             pass
 
     # Status text for instructions
     instruction_text = fig.text(
         0.5,
         0.01,
-        "Controls: ← → (speed), Enter (new map), O/P (fewer/more obstacles), Esc (exit)",
+        "Controls: ← (slow/stop), → (max speed), Enter (new map), O/P (fewer/more obstacles), Esc (exit)",
         ha="center",
         color="black",
         fontsize=12,
@@ -519,13 +494,11 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
         elif event.key == "escape":  # Exit
             plt.close(fig)
             return False, None
-        elif event.key == "left":  # Reduce speed
+        elif event.key == "left":  # Slow down or stop
             animation_speed[0] = min(animation_speed[0] + 50, 1000)
-            print(f"Speed: {animation_speed[0]}ms (slower)")
             update_speed()
-        elif event.key == "right":  # Increase speed
-            animation_speed[0] = max(animation_speed[0] - 50, 10)
-            print(f"Speed: {animation_speed[0]}ms (faster)")
+        elif event.key == "right":  # Max speed
+            animation_speed[0] = 1  # Set to maximum speed
             update_speed()
         elif event.key == "o":  # Fewer obstacles
             plt.close(fig)
@@ -559,8 +532,29 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
 def main():
     """
     Main function to run the application
+
+    Usage:
+        python proiect.py [map_size]
+
+    Args:
+        map_size (int, optional): Size of the square map. Defaults to 15 if not provided.
     """
-    size = 15  # Default map size
+    # Increase recursion limit for larger maps
+    sys.setrecursionlimit(10000)
+
+    # Get map size from command line argument or use default
+    if len(sys.argv) > 1:
+        try:
+            size = int(sys.argv[1])
+            if size < 5:
+                print("Map size must be at least 5x5. Using default size of 15.")
+                size = 15
+        except ValueError:
+            print("Invalid map size. Using default size of 15.")
+            size = 15
+    else:
+        size = 15  # Default map size
+
     seed = 100  # Initial seed
     num_obstacles = 5  # Initial number of obstacles
 
@@ -574,7 +568,8 @@ def main():
         )
 
         # Calculate and animate traversal path
-        path = calculate_zigzag_path(separate_img, cell_boundaries, x_coordinates)
+        path = calculate_zigzag_path(
+            separate_img, cell_boundaries, x_coordinates)
         result = animate_traversal(map_grid, separate_img, num_cells, path)
 
         regenerate, obstacle_change = result
@@ -603,19 +598,21 @@ INSTRUCTIONS:
 ------------
 1. Run the script to start the simulation with default settings
    
-   python proiect.py
+   python proiect.py [map_size]
+   
+   where map_size is an optional integer argument specifying the size of the square map.
+   If not provided, the default size is 15x15.
 
 2. KEYBOARD CONTROLS:
-   - LEFT ARROW: Decrease animation speed
-   - RIGHT ARROW: Increase animation speed
+   - LEFT ARROW: Slow down or stop
+   - RIGHT ARROW: Max speed
    - O: Reduce the number of obstacles in the next map
    - P: Increase the number of obstacles in the next map
    - ENTER: Generate a new map with current settings
    - ESC: Exit the application
 
-3. VIEWS:
-   - Left: Original map with robot path
-   - Right: Cellular decomposition with robot path
+3. VIEW:
+   - Cellular decomposition with robot path
 
 4. ALGORITHM BEHAVIOR:
    - The algorithm decomposes the map into cells using BCD
