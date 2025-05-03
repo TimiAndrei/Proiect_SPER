@@ -675,19 +675,25 @@ def calculate_zigzag_path_bfs(separate_img, cell_boundaries, x_coordinates, map_
     """
     path = []
     prev_end = None
+    map_height, map_width = map_grid.shape if map_grid is not None else (0, 0)
+
     for cell in sorted(cell_boundaries.keys()):
         x_cols = x_coordinates[cell]
         y_ranges = cell_boundaries[cell]
         cell_path = []
         for i, (col, (row_start, row_end)) in enumerate(zip(x_cols, y_ranges)):
+            # Ensure column index is within bounds
+            if col >= map_width:
+                continue
+
             rng = range(row_start, row_end)
             if i % 2 == 0:
                 for row in rng:
-                    if map_grid is None or map_grid[row, col] == 0:
+                    if map_grid is None or (row < map_height and map_grid[row, col] == 0):
                         cell_path.append((col, row))
             else:
                 for row in reversed(rng):
-                    if map_grid is None or map_grid[row, col] == 0:
+                    if map_grid is None or (row < map_height and map_grid[row, col] == 0):
                         cell_path.append((col, row))
         if not cell_path:
             continue  # skip empty cells
@@ -736,8 +742,8 @@ def animate_traversal_side_by_side(map_grid, separate_img, num_cells, path_class
     obstacle_img[separate_img == 0, 3] = 1
     axs[0].imshow(obstacle_img, origin="lower")
     axs[1].imshow(obstacle_img, origin="lower")
-    axs[0].set_title("Classic Traversal")
-    axs[1].set_title("BCD Traversal")
+    axs[0].set_title("BCD Traversal")
+    axs[1].set_title("BCD Traversal with BFS")
 
     # Create path segments that don't cross obstacles
     height, width = map_grid.shape
@@ -815,6 +821,9 @@ def animate_traversal_side_by_side(map_grid, separate_img, num_cells, path_class
 
     # Animation controls
     animation_speed = [100]  # Initial speed (milliseconds)
+    current_frame = [0]  # Current frame counter
+    is_complete = [False]  # Completion state
+    max_frames = max(len(path_classic), len(path_bfs))
 
     def init():
         robot_classic.set_data([], [])
@@ -826,6 +835,7 @@ def animate_traversal_side_by_side(map_grid, separate_img, num_cells, path_class
         return [robot_classic] + path_lines_classic + [robot_bfs] + path_lines_bfs
 
     def animate(i):
+        current_frame[0] = i
         idx1 = min(i, len(path_classic) - 1)
         idx2 = min(i, len(path_bfs) - 1)
         x_classic, y_classic = path_classic[idx1]
@@ -862,6 +872,12 @@ def animate_traversal_side_by_side(map_grid, separate_img, num_cells, path_class
             else:
                 path_lines_bfs[seg_idx].set_data([], [])
 
+        # Check if animation is complete
+        if idx1 == len(path_classic) - 1 and idx2 == len(path_bfs) - 1:
+            is_complete[0] = True
+            axs[0].set_title("BCD Traversal (Complete)")
+            axs[1].set_title("BCD Traversal with BFS (Complete)")
+
         return [robot_classic] + path_lines_classic + [robot_bfs] + path_lines_bfs
 
     # Create animation
@@ -869,9 +885,10 @@ def animate_traversal_side_by_side(map_grid, separate_img, num_cells, path_class
         fig,
         animate,
         init_func=init,
-        frames=max(len(path_classic), len(path_bfs)),
+        frames=max_frames,
         interval=animation_speed[0],
         blit=True,
+        repeat=False
     )
 
     # Function to update animation speed
@@ -887,7 +904,7 @@ def animate_traversal_side_by_side(map_grid, separate_img, num_cells, path_class
     instruction_text = fig.text(
         0.5,
         0.01,
-        "Controls: ← (slow/stop), → (max speed), Enter (new map), O/P (fewer/more obstacles), Esc (exit)",
+        "Controls: R (restart), ← (slow), → (max speed), Enter (new map), O/P (fewer/more obstacles), Esc (exit)",
         ha="center",
         color="black",
         fontsize=12,
@@ -902,12 +919,32 @@ def animate_traversal_side_by_side(map_grid, separate_img, num_cells, path_class
         elif event.key == "escape":  # Exit
             plt.close(fig)
             return False, None
-        elif event.key == "left":  # Slow down or stop
+        elif event.key == "left":  # Slow down
             animation_speed[0] = min(animation_speed[0] + 50, 1000)
             update_speed()
         elif event.key == "right":  # Max speed
             animation_speed[0] = 1  # Set to maximum speed
             update_speed()
+        elif event.key == "r":  # Restart animation
+            if is_complete[0]:
+                # Reset completion state and titles
+                is_complete[0] = False
+                axs[0].set_title("BCD Traversal")
+                axs[1].set_title("BCD Traversal with BFS")
+                # Create a new animation with the same speed
+                nonlocal ani
+                ani = animation.FuncAnimation(
+                    fig,
+                    animate,
+                    init_func=init,
+                    frames=max_frames,
+                    interval=animation_speed[0],
+                    blit=True,
+                    repeat=False
+                )
+                # Force the animation to start with the current speed
+                ani.event_source.interval = animation_speed[0]
+                plt.draw()
         elif event.key == "o":  # Fewer obstacles
             plt.close(fig)
             return True, -1  # Signal to decrease obstacles
@@ -965,7 +1002,7 @@ def main():
     if size < 5:
         print("Map size must be at least 5x5. Using default size of 15.")
         size = 15
-    seed = 100  # Initial seed
+    seed = 90  # Initial seed
     num_obstacles = 5  # Initial number of obstacles
 
     regenerate = True
