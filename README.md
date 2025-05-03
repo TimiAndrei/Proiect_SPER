@@ -1,94 +1,118 @@
-# Boustrophedon Cellular Decomposition with Animation
+# Boustrophedon Cellular Decomposition (BCD) Path Planning
 
-This project implements a **Boustrophedon Cellular Decomposition** algorithm for path planning and visualizes the robot's path using an animated map. The map contains randomly generated obstacles, and the animation speed can be adjusted interactively.
-
----
+A robot path planning algorithm that decomposes the environment into cells and creates a traversal path to cover all accessible areas. The implementation includes both classic BCD traversal and BCD with BFS transitions between cells.
 
 ## Features
 
-- **Random Map Generation**: Generates a grid map with random obstacles.
-- **Path Planning**: Implements the Boustrophedon Cellular Decomposition algorithm to compute the robot's path.
-- **Interactive Animation**: Visualizes the robot's path with adjustable animation speed.
-- **Regeneration**: Allows regenerating the map with a new seed for different obstacle configurations.
-
----
-
-## How to Use
-
-1. **Run the script without arguments** to generate a map of size `15x15`:
-
-   ```bash
-   python proiect.py
-   ```
-
-2. **Run the script with an argument** to specify the map size (e.g., 20x20):
-
-   ```bash
-   python proiect.py 20
-   ```
-
-3. **Interactive Controls**:
-   - Press **Enter**: Generate a new random map.
-   - Press **Escape**: Exit the application.
-   - Press **Left Arrow**: Decrease animation speed.
-   - Press **Right Arrow**: Increase animation speed.
-
----
-
-## Code Overview
-
-### 1. **Map Generation**
-
-The `create_map(size, seed)` function generates a grid map of the specified size with random obstacles. The seed ensures reproducibility.
-
-### 2. **Path Planning**
-
-The `bcd(map_grid)` function implements the **Boustrophedon Cellular Decomposition** algorithm to compute the robot's path through the map.
-
-### 3. **Animation**
-
-The `create_animation(path, map_grid, on_close_callback)` function visualizes the robot's path on the map. The animation speed can be adjusted interactively using the arrow keys.
-
-### 4. **Main Function**
-
-The `main()` function handles user input, map generation, and animation. It also supports regenerating the map with a new seed.
-
----
+- Cellular decomposition of the environment
+- Two traversal modes:
+  - Classic BCD: Simple zigzag pattern within cells
+  - BCD with BFS: Zigzag pattern within cells with BFS transitions between cells
+- Interactive visualization with animation controls
+- Obstacle avoidance
+- Complete coverage path planning
+- Side-by-side comparison of traversal methods
 
 ## Requirements
 
 - Python 3.x
-- Required libraries:
-  - `numpy`
-  - `matplotlib`
+- NumPy
+- Matplotlib
 
-Install the required libraries using:
+## Installation
+
+1. Clone the repository
+2. Install the required packages:
 
 ```bash
 pip install numpy matplotlib
 ```
 
----
+## Usage
 
-## Example Output
+Run the script with the following command:
 
-### Initial Map
+```bash
+python proiect.py [map_size] [--mode classic|bfs|both]
+```
 
-A randomly generated map with obstacles (black cells) and free space (white cells).
+### Arguments
 
-### Animated Path
+- `map_size`: Optional integer argument specifying the size of the square map (default: 15)
+- `--mode`: Optional argument to select the traversal mode:
+  - `classic`: Classic BCD (no BFS between cells, just zigzag and jump)
+  - `bfs`: BCD with BFS transitions (zigzag in each cell, BFS between cells)
+  - `both`: Show both traversals side by side for comparison
 
-The robot's path is visualized as a red line moving through the map.
+### Examples
 
----
+1. Default map size with classic traversal:
 
-## Notes
+```bash
+python proiect.py
+```
 
-- The default map size is `15x15`. You can specify a custom size by passing an integer argument when running the script.
-- The animation speed can be adjusted between `10ms` (fastest) and `1000ms` (slowest).
+2. 20x20 map with BFS traversal:
 
----
+```bash
+python proiect.py 20 --mode bfs
+```
+
+3. 25x25 map with side-by-side comparison:
+
+```bash
+python proiect.py 25 --mode both
+```
+
+## Controls
+
+During animation:
+
+- `LEFT ARROW`: Slow down animation
+- `RIGHT ARROW`: Speed up animation (to max)
+- `R`: Restart animation (when complete)
+- `O`: Fewer obstacles in the next map
+- `P`: More obstacles in the next map
+- `ENTER`: Generate a new map with current settings
+- `ESC`: Exit the application
+
+## Algorithm Details
+
+### Boustrophedon Cellular Decomposition
+
+The algorithm works by:
+
+1. Dividing the environment into cells at critical points where obstacles change the connectivity of the free space
+2. Each cell is covered using a back-and-forth motion (zigzag pattern)
+3. The robot prioritizes visiting the closest unvisited cells
+4. The path visualization avoids cutting through obstacles
+
+### Traversal Modes
+
+#### Classic BCD
+
+- Simple zigzag pattern within each cell
+- Direct jumps between cells
+- Efficient for simple environments
+
+#### BCD with BFS
+
+- Zigzag pattern within cells
+- BFS (Breadth-First Search) for optimal transitions between cells
+- Better coverage in complex environments
+- Allows revisiting cells when necessary for complete coverage
+
+## Visualization
+
+The visualization shows:
+
+- Cell decomposition with different colors for each cell
+- Obstacles in black
+- Robot position as a red dot
+- Traversed path in red
+- Completion status in the title
 
 ## License
 
-This project is for educational purposes and is not licensed for commercial use.
+This project is for educational purposes and is not licensed for
+commercial use.

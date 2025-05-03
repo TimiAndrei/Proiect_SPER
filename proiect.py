@@ -444,7 +444,7 @@ def calculate_zigzag_path(separate_img, cell_boundaries, x_coordinates):
     return path
 
 
-def animate_traversal(map_grid, separate_img, num_cells, path):
+def animate_traversal(map_grid, separate_img, num_cells, path, mode='classic'):
     """
     Animate the traversal of the map using a simple robot visualization
 
@@ -453,6 +453,7 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
         separate_img: Image with cell decomposition
         num_cells: Number of cells
         path: List of (x, y) coordinates to traverse
+        mode: 'classic' or 'bfs' to determine the title
     """
     # Create figure with single view - cellular decomposition
     fig, ax = plt.subplots(figsize=(8, 8))
@@ -467,7 +468,12 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
     obstacle_img = np.zeros((*separate_img.shape, 4))
     obstacle_img[separate_img == 0, 3] = 1
     ax.imshow(obstacle_img, origin="lower")
-    ax.set_title("Cellular Decomposition")
+
+    # Set title based on mode
+    if mode == 'classic':
+        ax.set_title("Classic BCD Traversal")
+    else:
+        ax.set_title("BCD Traversal with BFS")
 
     # Create path segments that don't cross obstacles
     height, width = map_grid.shape
@@ -523,6 +529,11 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
 
     # Animation controls
     animation_speed = [100]  # Initial speed (milliseconds)
+    current_frame = [0]  # Current frame counter
+    is_complete = [False]  # Completion state
+    frame_skip = [1]  # Number of frames to skip for faster animation
+    # Only use frame skip for large maps
+    use_frame_skip = map_grid.shape[0] > 50
 
     def init():
         robot.set_data([], [])
@@ -531,15 +542,16 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
         return [robot] + path_lines
 
     def animate(i):
-        if i >= len(path):
-            i = len(path) - 1
+        current_frame[0] = i * frame_skip[0] if use_frame_skip else i
+        if current_frame[0] >= len(path):
+            current_frame[0] = len(path) - 1
 
         # Update robot position
-        x, y = path[i]
+        x, y = path[current_frame[0]]
         robot.set_data([x], [y])
 
         # Update path segments - only show segments we've traversed
-        current_point_index = i
+        current_point_index = current_frame[0]
         active_points = set(path[: current_point_index + 1])
 
         for seg_idx, segment in enumerate(path_segments):
@@ -552,6 +564,14 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
             else:
                 path_lines[seg_idx].set_data([], [])
 
+        # Check if animation is complete
+        if current_frame[0] == len(path) - 1:
+            is_complete[0] = True
+            if mode == 'classic':
+                ax.set_title("Classic BCD Traversal (Complete)")
+            else:
+                ax.set_title("BCD Traversal with BFS (Complete)")
+
         return [robot] + path_lines
 
     # Create animation
@@ -559,9 +579,10 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
         fig,
         animate,
         init_func=init,
-        frames=len(path),
+        frames=len(path) // frame_skip[0] if use_frame_skip else len(path),
         interval=animation_speed[0],
         blit=True,
+        repeat=False
     )
 
     # Function to update animation speed
@@ -577,7 +598,7 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
     instruction_text = fig.text(
         0.5,
         0.01,
-        "Controls: ← (slow/stop), → (max speed), Enter (new map), O/P (fewer/more obstacles), Esc (exit)",
+        "Controls: R (restart), ← (slow), → (max speed), Enter (new map), O/P (fewer/more obstacles), Esc (exit)",
         ha="center",
         color="black",
         fontsize=12,
@@ -592,12 +613,45 @@ def animate_traversal(map_grid, separate_img, num_cells, path):
         elif event.key == "escape":  # Exit
             plt.close(fig)
             return False, None
-        elif event.key == "left":  # Slow down or stop
-            animation_speed[0] = min(animation_speed[0] + 50, 1000)
+        elif event.key == "left":  # Slow down
+            if use_frame_skip and frame_skip[0] > 1:
+                frame_skip[0] = max(1, frame_skip[0] - 1)
+            else:
+                animation_speed[0] = min(animation_speed[0] + 50, 1000)
             update_speed()
-        elif event.key == "right":  # Max speed
-            animation_speed[0] = 1  # Set to maximum speed
+        elif event.key == "right":  # Speed up
+            if use_frame_skip:
+                if animation_speed[0] > 1:
+                    animation_speed[0] = max(1, animation_speed[0] - 50)
+                else:
+                    # Skip up to 10 frames
+                    frame_skip[0] = min(10, frame_skip[0] + 1)
+            else:
+                animation_speed[0] = max(1, animation_speed[0] - 50)
             update_speed()
+        elif event.key == "r":  # Restart animation
+            if is_complete[0]:
+                # Reset completion state and title
+                is_complete[0] = False
+                if mode == 'classic':
+                    ax.set_title("Classic BCD Traversal")
+                else:
+                    ax.set_title("BCD Traversal with BFS")
+                # Create a new animation with the same speed
+                nonlocal ani
+                ani = animation.FuncAnimation(
+                    fig,
+                    animate,
+                    init_func=init,
+                    frames=len(
+                        path) // frame_skip[0] if use_frame_skip else len(path),
+                    interval=animation_speed[0],
+                    blit=True,
+                    repeat=False
+                )
+                # Force the animation to start with the current speed
+                ani.event_source.interval = animation_speed[0]
+                plt.draw()
         elif event.key == "o":  # Fewer obstacles
             plt.close(fig)
             return True, -1  # Signal to decrease obstacles
@@ -823,7 +877,9 @@ def animate_traversal_side_by_side(map_grid, separate_img, num_cells, path_class
     animation_speed = [100]  # Initial speed (milliseconds)
     current_frame = [0]  # Current frame counter
     is_complete = [False]  # Completion state
-    max_frames = max(len(path_classic), len(path_bfs))
+    frame_skip = [1]  # Number of frames to skip for faster animation
+    # Only use frame skip for large maps
+    use_frame_skip = map_grid.shape[0] > 50
 
     def init():
         robot_classic.set_data([], [])
@@ -835,9 +891,9 @@ def animate_traversal_side_by_side(map_grid, separate_img, num_cells, path_class
         return [robot_classic] + path_lines_classic + [robot_bfs] + path_lines_bfs
 
     def animate(i):
-        current_frame[0] = i
-        idx1 = min(i, len(path_classic) - 1)
-        idx2 = min(i, len(path_bfs) - 1)
+        current_frame[0] = i * frame_skip[0] if use_frame_skip else i
+        idx1 = min(current_frame[0], len(path_classic) - 1)
+        idx2 = min(current_frame[0], len(path_bfs) - 1)
         x_classic, y_classic = path_classic[idx1]
         x_bfs, y_bfs = path_bfs[idx2]
         robot_classic.set_data([x_classic], [y_classic])
@@ -885,7 +941,8 @@ def animate_traversal_side_by_side(map_grid, separate_img, num_cells, path_class
         fig,
         animate,
         init_func=init,
-        frames=max_frames,
+        frames=max(len(path_classic), len(
+            path_bfs)) // frame_skip[0] if use_frame_skip else max(len(path_classic), len(path_bfs)),
         interval=animation_speed[0],
         blit=True,
         repeat=False
@@ -920,10 +977,20 @@ def animate_traversal_side_by_side(map_grid, separate_img, num_cells, path_class
             plt.close(fig)
             return False, None
         elif event.key == "left":  # Slow down
-            animation_speed[0] = min(animation_speed[0] + 50, 1000)
+            if use_frame_skip and frame_skip[0] > 1:
+                frame_skip[0] = max(1, frame_skip[0] - 1)
+            else:
+                animation_speed[0] = min(animation_speed[0] + 50, 1000)
             update_speed()
-        elif event.key == "right":  # Max speed
-            animation_speed[0] = 1  # Set to maximum speed
+        elif event.key == "right":  # Speed up
+            if use_frame_skip:
+                if animation_speed[0] > 1:
+                    animation_speed[0] = max(1, animation_speed[0] - 50)
+                else:
+                    # Skip up to 10 frames
+                    frame_skip[0] = min(10, frame_skip[0] + 1)
+            else:
+                animation_speed[0] = max(1, animation_speed[0] - 50)
             update_speed()
         elif event.key == "r":  # Restart animation
             if is_complete[0]:
@@ -937,7 +1004,8 @@ def animate_traversal_side_by_side(map_grid, separate_img, num_cells, path_class
                     fig,
                     animate,
                     init_func=init,
-                    frames=max_frames,
+                    frames=max(len(path_classic), len(
+                        path_bfs)) // frame_skip[0] if use_frame_skip else max(len(path_classic), len(path_bfs)),
                     interval=animation_speed[0],
                     blit=True,
                     repeat=False
@@ -1023,11 +1091,13 @@ def main():
         if mode == 'classic':
             path = calculate_zigzag_path(
                 separate_img, cell_boundaries, x_coordinates)
-            result = animate_traversal(map_grid, separate_img, num_cells, path)
+            result = animate_traversal(
+                map_grid, separate_img, num_cells, path, mode='classic')
         elif mode == 'bfs':
             path = calculate_zigzag_path_bfs(
                 separate_img, cell_boundaries, x_coordinates, map_grid=map_grid)
-            result = animate_traversal(map_grid, separate_img, num_cells, path)
+            result = animate_traversal(
+                map_grid, separate_img, num_cells, path, mode='bfs')
         elif mode == 'both':
             path_classic = calculate_zigzag_path(
                 separate_img, cell_boundaries, x_coordinates)
